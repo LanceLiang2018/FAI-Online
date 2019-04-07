@@ -308,7 +308,7 @@ class FAINetwork:
         return r.text
 
     def get_result(self, code: str):
-        r = requests.get(self.API2 + code)
+        r = requests.get(self.API1 + code)
         if r.status_code != 200:
             return {"code": code, "data": "", "error": "Server Error", "status": 0, "uptime": 0, "winner": 0}
         try:
@@ -333,16 +333,29 @@ class FAINetwork:
 
 # UI部分
 class FaiUi:
-    def __init__(self, _root, w: int, h: int):
-        self.fai = FAI(w, h)
-        self.net = FAINetwork()
+    def __init__(self, _root, code: str, player: int, is_new: bool = False, w: int = None, h: int = None):
+        self.code = code
+        net = FAINetwork()
+
+        # 需要新建房间
+        if is_new is True:
+            self.w, self.h = w, h
+            js = net.post_result(code, player, action='put', size='%sx%s' % (w, h))
+            js = net.get_result(code)
+            # data = js['data']
+        else:
+            js = net.get_result(code)
+            data = js['data']
+            self.h = len(data.split('\n'))
+            self.w = len(data.split('\n')[0])
+
+        self.fai = FAI(self.w, self.h)
 
         self.root = _root
         self.root.resizable(width=False, height=False)
         self.root.attributes('-alpha', 0.9)
-        self.root.title("FAI - 在线五子棋对战程序")
+        self.root.title("FAI - 在线五子棋对战程序 (房间 %s)" % code)
 
-        self.w, self.h = w, h
         self.started = False
         self.stopped = False
 
@@ -401,6 +414,7 @@ class FaiUi:
         self.frame.grid(row=1, columnspan=3)
 
         self.thread = None
+        self.thread_data = None
 
     def init_data(self, w: int, h: int):
         self.w, self.h = w, h
@@ -481,11 +495,27 @@ class FaiUi:
         # 守护进程：主线程结束自己也结束
         self.thread.setDaemon(True)
         self.thread.start()
+        self.thread_data = threading.Thread(target=self.refresh_data)
+        # 守护进程：主线程结束自己也结束
+        self.thread_data.setDaemon(True)
+        self.thread_data.start()
+
+    # 定时更新棋盘内容
+    def refresh_data(self):
+        net = FAINetwork()
+        while self.started is True:
+            data = net.get_data(self.code)
+            split = data.split('\n')
+            for y in range(len(split)):
+                for x in range(len(split[y])):
+                    self.fai.map[y][x] = int(split[y][x])
+                    self.vars[y][x].set(self.fai.get_char(x=x, y=y))
+            time.sleep(1)
 
     def refresh(self):
-        for y in range(self.h):
-            for x in range(self.w):
-                self.vars[y][x].set(self.fai.get_char(x=x, y=y))
+        # for y in range(self.h):
+        #     for x in range(self.w):
+        #         self.vars[y][x].set(self.fai.get_char(x=x, y=y))
 
         m, s = divmod(self.time_p1, 60)
         self.var_p1.set("%02d:%02d" % (m, s))
@@ -591,25 +621,31 @@ class FaiUiClick:
 class FAIConfig:
     def __init__(self, _root):
         self.root = _root
+        self.root.title("FAI - 在线五子棋对战程序")
         self.root.resizable(width=False, height=False)
         self.frame = Frame(self.root)
 
         Label(self.frame, text="房间").grid(row=0, column=0)
-        self.code = Entry(self.frame)
-        self.code.grid(row=0, column=1, sticky=W+E)
+        self.code = StringVar()
+        self.code.set("Master")
+        Entry(self.frame, textvariable=self.code).grid(row=0, column=1, sticky=W+E)
 
         self.frame_wh = LabelFrame(self.frame, text='新房间')
 
-        self.w = Entry(self.frame_wh, width=8)
-        self.h = Entry(self.frame_wh, width=8)
-        self.w.insert(0, "15")
-        self.h.insert(0, "15")
-        self.w.configure(state=DISABLED)
-        self.h.configure(state=DISABLED)
+        self.w = StringVar()
+        self.h = StringVar()
+        self.entry_w = Entry(self.frame_wh, width=8, textvariable=self.w)
+        self.entry_h = Entry(self.frame_wh, width=8, textvariable=self.h)
+        # self.w.insert(0, "15")
+        # self.h.insert(0, "15")
+        self.w.set("15")
+        self.h.set("15")
+        self.entry_w.configure(state=DISABLED)
+        self.entry_h.configure(state=DISABLED)
         Label(self.frame_wh, text="宽度").grid(row=2, column=0)
         Label(self.frame_wh, text="高度").grid(row=2, column=2)
-        self.w.grid(row=2, column=1)
-        self.h.grid(row=2, column=3)
+        self.entry_w.grid(row=2, column=1)
+        self.entry_h.grid(row=2, column=3)
 
         self.frame_wh.grid(row=1, columnspan=3, sticky=W+E)
 
@@ -639,27 +675,37 @@ class FAIConfig:
 
     def check_fun(self):
         if self.var_check.get() is True:
-            self.w.configure(state=NORMAL)
-            self.h.configure(state=NORMAL)
+            self.entry_w.configure(state=NORMAL)
+            self.entry_h.configure(state=NORMAL)
         else:
-            self.w.configure(state=DISABLED)
-            self.h.configure(state=DISABLED)
+            self.entry_w.configure(state=DISABLED)
+            self.entry_h.configure(state=DISABLED)
 
     def run_thread(self):
         net = FAINetwork()
         self.var_message.set('等待服务器响应...')
         res = net.wakeup(timeout=30)
         if res is False:
+            self.waiting = False
             self.var_message.set("网络错误/服务器响应错误")
             tkinter.messagebox.showerror("网络错误", "服务器响应错误")
             return
         self.var_message.set('服务器响应...OK')
-        w, h = int(self.w.get()), int(self.h.get())
+        try:
+            if self.var_check.get() is True:
+                self.ui = FaiUi(self.root, self.code.get(), self.var_player.get(),
+                                is_new=True, w=int(self.w.get()), h=int(self.h.get()))
+            else:
+                self.ui = FaiUi(self.root, self.code.get(), self.var_player.get(),
+                                is_new=False, w=15, h=15)
+        except ValueError as e:
+            self.waiting = False
+            self.var_message.set("参数设置错误")
+            tkinter.messagebox.showerror("参数设置错误", str(e))
+            return
         self.frame.destroy()
-        self.ui = FaiUi(self.root, w, h)
         # 不需要mainloop
         # self.ui.root.mainloop()
-        self.waiting = False
 
     def done(self):
         if self.waiting is True:
