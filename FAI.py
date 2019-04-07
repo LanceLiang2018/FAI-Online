@@ -7,6 +7,7 @@ import threading
 import time
 import requests
 import json
+from base_logger import getLogger
 # ●○•
 
 
@@ -350,6 +351,8 @@ class FaiUi:
             self.w = len(data.split('\n')[0])
 
         self.fai = FAI(self.w, self.h)
+        w = self.w
+        h = self.h
 
         self.root = _root
         self.root.resizable(width=False, height=False)
@@ -503,14 +506,17 @@ class FaiUi:
     # 定时更新棋盘内容
     def refresh_data(self):
         net = FAINetwork()
-        while self.started is True:
+        while True:
             data = net.get_data(self.code)
+            logger.debug(data)
             split = data.split('\n')
             for y in range(len(split)):
                 for x in range(len(split[y])):
                     self.fai.map[y][x] = int(split[y][x])
                     self.vars[y][x].set(self.fai.get_char(x=x, y=y))
             time.sleep(1)
+            if self.started is False:
+                return
 
     def refresh(self):
         # for y in range(self.h):
@@ -697,7 +703,7 @@ class FAIConfig:
                                 is_new=True, w=int(self.w.get()), h=int(self.h.get()))
             else:
                 self.ui = FaiUi(self.root, self.code.get(), self.var_player.get(),
-                                is_new=False, w=15, h=15)
+                                is_new=False)
         except ValueError as e:
             self.waiting = False
             self.var_message.set("参数设置错误")
@@ -718,6 +724,10 @@ class FAIConfig:
         self.waiting = True
         t = threading.Thread(target=self.run_thread)
         t.start()
+
+
+logger = getLogger(__name__)
+logger.info('Started')
 
 
 if __name__ == '__main__':
