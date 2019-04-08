@@ -318,10 +318,12 @@ class FAINetwork:
             return {"code": code, "data": "", "error": "Server Error", "status": 0, "uptime": 0, "winner": 0}
         return js
 
-    def post_result(self, code: str, player: int, action: str = 'put', winner: int = 0, size: str = None):
+    def post_result(self, code: str, player: int, action: str = 'put', data: str = None, winner: int = 0, size: str = None):
         params = {'action': action, 'player': player, 'winner': winner}
         if size is not None:
             params['size'] = size
+        if data is not None:
+            params['data'] = data
         r = requests.post(self.API1 + code, data=params)
         if r.status_code != 200:
             return {'code': -1, 'message': "Server Error."}
@@ -336,6 +338,7 @@ class FAINetwork:
 class FaiUi:
     def __init__(self, _root, code: str, player: int, is_new: bool = False, w: int = None, h: int = None):
         self.code = code
+        self.myself = player
         net = FAINetwork()
 
         # 需要新建房间
@@ -343,12 +346,12 @@ class FaiUi:
             self.w, self.h = w, h
             js = net.post_result(code, player, action='put', size='%sx%s' % (w, h))
             js = net.get_result(code)
-            # data = js['data']
+            self.data = js['data']
         else:
             js = net.get_result(code)
-            data = js['data']
-            self.h = len(data.split('\n'))
-            self.w = len(data.split('\n')[0])
+            self.data = js['data']
+            self.h = len(self.data.split('\n'))
+            self.w = len(self.data.split('\n')[0])
 
         self.fai = FAI(self.w, self.h)
         w = self.w
@@ -412,12 +415,14 @@ class FaiUi:
                 self.map[y][x].grid(row=y, column=x)
 
         self.frame_p1.grid(row=0, column=0)
-        self.button.grid(row=0, column=1)
+        # self.button.grid(row=0, column=1)
         self.frame_p2.grid(row=0, column=2)
         self.frame.grid(row=1, columnspan=3)
 
         self.thread = None
         self.thread_data = None
+
+        self.start()
 
     def init_data(self, w: int, h: int):
         self.w, self.h = w, h
@@ -507,8 +512,15 @@ class FaiUi:
     def refresh_data(self):
         net = FAINetwork()
         while True:
-            data = net.get_data(self.code)
-            logger.debug(data)
+            # data = net.get_data(self.code)
+            js = net.get_result(self.code)
+            if 'error' in js:
+                logger.error(js['error'])
+                return
+            data = js['data']
+            logger.info('Got json: %s' % json.dumps(js))
+            self.data = data
+            # logger.debug(data)
             split = data.split('\n')
             for y in range(len(split)):
                 for x in range(len(split[y])):
@@ -518,10 +530,31 @@ class FaiUi:
             if self.started is False:
                 return
 
+    def list2data(self, li: list):
+        data = ''
+        for y in li:
+            for x in y:
+                data = data + str(x)
+            data = data + '\n'
+        data = data[:-1]
+        return data
+
+    def data2list(self, data: str = None):
+        if data is None:
+            data = self.data
+        split = data.split('\n')
+        li = []
+        for y in split:
+            ix = []
+            for x in y:
+                ix.append(int(x))
+            li.append(ix)
+        return li
+
     def refresh(self):
-        # for y in range(self.h):
-        #     for x in range(self.w):
-        #         self.vars[y][x].set(self.fai.get_char(x=x, y=y))
+        for y in range(self.h):
+            for x in range(self.w):
+                self.vars[y][x].set(self.fai.get_char(x=x, y=y))
 
         m, s = divmod(self.time_p1, 60)
         self.var_p1.set("%02d:%02d" % (m, s))
@@ -577,18 +610,27 @@ class FaiUiClick:
     def set_pos(self, x, y):
         self.x, self.y = x, y
 
-    def run(self):
-        if self.ui.stopped is True:
-            return
-        print('clicked:', 'x:', self.x, 'y:', self.y, 'player:', self.ui.player)
-        res = self.fai.put(self.x, self.y, self.ui.player)
+    def post_thread(self):
+        net = FAINetwork()
+        # 测试放置
+        fai = copy.deepcopy(self.fai)
+        res = fai.put(self.x, self.y, self.ui.player)
         # self.fai.put(self.x, self.y, random.randint(0, 2))
 
+        # 可以放置
         if res:
-            if self.ui.player == 1:
-                self.ui.player = 2
-            elif self.ui.player == 2:
-                self.ui.player = 1
+            li = self.ui.data2list()
+            li[self.y][self.x] = self.ui.player
+            data = self.ui.list2data(li)
+            self.ui.data = data
+            self.ui.fai.map = li
+            self.ui.refresh()
+
+            net.post_result(self.ui.code, self.ui.player, action='put', data=data)
+            # if self.ui.player == 1:
+            #     self.ui.player = 2
+            # elif self.ui.player == 2:
+            #     self.ui.player = 1
 
         if self.ui.started is False:
             self.ui.start()
@@ -601,27 +643,13 @@ class FaiUiClick:
             self.ui.stopped = True
             self.ui.started = False
 
-#
-# def ui_refresh():
-#     global ui
-#     for y in range(ui.h):
-#         for x in range(ui.w):
-#             ui.vars[y][x].set(ui.fai.get_char(x=x, y=y))
-#
-#     m, s = divmod(ui.time_p1, 60)
-#     ui.var_p1.set("%02d:%02d" % (m, s))
-#     m, s = divmod(ui.time_p2, 60)
-#     ui.var_p2.set("%02d:%02d" % (m, s))
-#
-#     if ui.player == 1:
-#         ui.var_p1.set(ui.var_p1.get() + " 执棋")
-#     if ui.player == 2:
-#         ui.var_p2.set(ui.var_p2.get() + " 执棋")
+    def run(self):
+        if self.ui.stopped is True:
+            return
+        print('clicked:', 'x:', self.x, 'y:', self.y, 'player:', self.ui.player)
 
-
-# def init_ui(w, h):
-#     global ui
-#     ui = FaiUi(Tk(), w, h)
+        t = threading.Thread(target=self.post_thread)
+        t.start()
 
 
 class FAIConfig:
